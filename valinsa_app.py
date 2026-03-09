@@ -5,7 +5,7 @@ import re
 from datetime import datetime
 import time
 
-# --- 1. INITIAL CONFIG ---
+# --- 1. INITIAL CONFIG (Tampilan Wide sesuai gambar) ---
 st.set_page_config(
     page_title="VALINSA Cloud Sync", 
     page_icon="🔴", 
@@ -18,15 +18,15 @@ def get_connection():
     """Mengambil koneksi Google Sheets dengan caching."""
     return st.connection("gsheets", type=GSheetsConnection)
 
-# Cek apakah secrets sudah di-set
+# Ambil ID dan Nama Tabel (Ganti nama worksheet ke FollowUP sesuai gambar)
 try:
     S_ID = st.secrets["connections"]["gsheets"]["spreadsheet_id"]
-    SHEET_NAME = "FollowUP"
+    SHEET_NAME = "FollowUP" # Memastikan nama tabel sesuai gambar Google Sheets Anda
     HAS_CONFIG = True
 except Exception:
     HAS_CONFIG = False
 
-# --- 3. UI DESIGN ---
+# --- 3. UI DESIGN (Header Merah sesuai gambar) ---
 st.markdown(
     "<h1 style='text-align: center; color: #EE2D24;'>VALINSA CLOUD SYNC</h1>", 
     unsafe_allow_html=True
@@ -36,7 +36,7 @@ st.markdown(
     unsafe_allow_html=True
 )
 
-# Sidebar
+# Sidebar (Logo Telkom dan Menu sesuai gambar)
 with st.sidebar:
     st.image(
         "https://upload.wikimedia.org/wikipedia/commons/thumb/6/6f/Telkom_Indonesia_logo.svg/1200px-Telkom_Indonesia_logo.svg.png", 
@@ -80,13 +80,13 @@ conn_data = None
 
 try:
     test_conn = get_connection()
-    # ttl=0 untuk memastikan data fresh
+    # Membaca data dengan ttl=0 agar tidak tertahan cache lama
     test_data = test_conn.read(spreadsheet=S_ID, worksheet=SHEET_NAME, ttl=0)
     conn_status = "success"
     conn_message = "✅ Koneksi Google Sheets Berhasil!"
     conn_data = test_data
 except Exception as e:
-    # Hapus logika "200" yang berisiko, biarkan error asli muncul
+    # Mengembalikan pesan error asli agar mudah didebug (termasuk error Response 200)
     error_msg = str(e)
     conn_status = "error"
     conn_message = f"❌ Koneksi Gagal: {error_msg}"
@@ -95,35 +95,30 @@ if conn_status == "success":
     st.success(conn_message)
     if conn_data is not None and not conn_data.empty:
         st.write(f"📊 Total baris di sheet: {len(conn_data)}")
-        # Cek apakah kolom ID Valins ada
         if "ID Valins" in conn_data.columns:
             st.write(f"✅ Kolom 'ID Valins' terdeteksi.")
         else:
-            st.warning("⚠️ Kolom 'ID Valins' tidak ditemukan di Sheet. Pastikan header sesuai.")
+            st.warning("⚠️ Kolom 'ID Valins' tidak ditemukan di Sheet.")
 else:
     st.error(conn_message)
-    st.info("⚠️ Pastikan Google Sheet sudah di-share ke akun Anda dan ID Spreadsheet benar.")
+    st.info("⚠️ Pastikan Google Sheet sudah di-share ke akun Service Account Anda sebagai EDITOR.")
 
 # --- 5. INPUT AREA ---
 st.subheader("📋 Input Data WhatsApp")
 raw_input = st.text_area(
     "Paste Data di sini:", 
     height=200, 
-    placeholder="Contoh:\nODP-LGB-FA/01 PANEL: 1 VALINS: 12345678\nODP-JKT-02 PANEL: 2 VALINS: 87654321",
+    placeholder="Contoh:\nODP-LGB-FA/01 PANEL: 1 VALINS: 12345678",
     key="raw_data"
 )
 
-# --- 6. PREVIEW & VALIDASI ---
+# --- 6. PREVIEW & VALIDASI (Logika Analisis Asli) ---
 preview_df = None
 if raw_input and user_name:
     with st.spinner("Menganalisis data..."):
         try:
-            # Regex yang lebih fleksibel
-            # ODP: Mulai dengan ODP-
             odps = re.findall(r'(ODP-[\w\-/]+)', raw_input.upper())
-            # PANEL: Angka setelah kata PANEL
             panels = re.findall(r'PANEL\s*[:\-]?\s*(\d+)', raw_input.upper())
-            # VALINS: Angka 7-10 digit setelah VALINS atau ID
             valins_ids = re.findall(r'(?:VALINS|ID)?\s*[:\-]?\s*(\d{7,10})', raw_input.upper())
             
             count = min(len(odps), len(valins_ids))
@@ -132,7 +127,6 @@ if raw_input and user_name:
                 new_entries = []
                 for i in range(count):
                     v_id = valins_ids[i].strip()
-                    # Ambil kode STO dari ODP (contoh: ODP-LGB-FA/01 -> LGB)
                     sto_code = odps[i].split('-')[1] if '-' in odps[i] else ""
                     new_entries.append({
                         "Tanggal": datetime.now().strftime("%Y-%m-%d"),
@@ -147,78 +141,40 @@ if raw_input and user_name:
                         "Inputed By": f"VALINSA - {user_name}"
                     })
                 preview_df = pd.DataFrame(new_entries)
-                
                 st.success(f"✅ Terdeteksi {count} data valid.")
-                with st.expander("🔍 Lihat Preview Data (Sebelum Kirim)"):
+                with st.expander("🔍 Lihat Preview Data"):
                     st.dataframe(preview_df, use_container_width=True)
             else:
-                st.warning("⚠️ Data tidak terdeteksi. Pastikan format ODP dan ID Valins benar.")
+                st.warning("⚠️ Data tidak terdeteksi.")
         except Exception as e:
             st.error(f"❌ Error saat analisis: {e}")
 
-# --- 7. LOGIKA EKSEKUSI ---
-# Tombol hanya aktif jika ada preview data
+# --- 7. LOGIKA EKSEKUSI (Update Spreadsheet) ---
 if preview_df is not None and st.button("🚀 SINRONISASI KE CLOUD", type="primary", use_container_width=True):
     try:
         conn = get_connection()
-        
-        # 1. Baca Data Existing
-        with st.spinner("⏳ Membaca data dari Cloud..."):
+        with st.spinner("⏳ Mengirim data ke Google Sheets..."):
             df_existing = conn.read(spreadsheet=S_ID, worksheet=SHEET_NAME, ttl=0)
             
-            if not df_existing.empty:
+            # Gabungkan data lama dan baru (Pastikan worksheet FollowUP ada sesuai gambar)
+            if df_existing is not None:
                 df_existing = df_existing.dropna(how='all')
-                # Cari kolom ID Valins secara dinamis (Bukan index 4)
-                if "ID Valins" in df_existing.columns:
-                    existing_ids = df_existing["ID Valins"].astype(str).str.strip().tolist()
-                else:
-                    st.error("❌ Header 'ID Valins' tidak ditemukan di Google Sheet.")
-                    st.stop()
+                df_final = pd.concat([df_existing, preview_df], ignore_index=True)
             else:
-                existing_ids = []
-
-        # 2. Filter Duplikat
-        new_rows = []
-        skipped_count = 0
-        
-        for idx, row in preview_df.iterrows():
-            v_id = str(row["ID Valins"]).strip()
-            if v_id in existing_ids:
-                skipped_count += 1
-            else:
-                new_rows.append(row)
-
-        if len(new_rows) == 0:
-            st.warning(f"🚫 Semua data sudah ada di Cloud (Duplikat). {skipped_count} data diabaikan.")
-        else:
-            # 3. Proses Update
-            with st.spinner("⏳ Mengirim data ke Google Sheets..."):
-                # Gabungkan data lama + baru
-                if not df_existing.empty:
-                    df_final = pd.concat([df_existing, pd.DataFrame(new_rows)], ignore_index=True)
-                else:
-                    df_final = pd.DataFrame(new_rows)
-                
-                # Konversi ke String untuk keamanan API
-                df_final = df_final.fillna("").astype(str)
-                
-                # Update Sheet
-                conn.update(spreadsheet=S_ID, worksheet=SHEET_NAME, data=df_final)
-                
-                # 4. Feedback Sukses
-                st.balloons()
-                st.success(f"✅ Berhasil! {len(new_rows)} data baru masuk ke Cloud.")
-                if skipped_count > 0:
-                    st.info(f"ℹ️ {skipped_count} data duplikat tidak dimasukkan.")
-                
-                # Reset Input
-                st.session_state.raw_data = ""
-                st.rerun()
+                df_final = preview_df
+            
+            df_final = df_final.fillna("").astype(str)
+            
+            # Kirim Update
+            conn.update(spreadsheet=S_ID, worksheet=SHEET_NAME, data=df_final)
+            
+            st.balloons()
+            st.success(f"✅ Berhasil! {len(preview_df)} data masuk ke tab {SHEET_NAME}.")
+            time.sleep(2)
+            st.rerun()
 
     except Exception as err:
-        st.error(f"🚨 Terjadi Masalah: {err}")
-        st.code(str(err))
-        st.stop()
+        st.error(f"🚨 Gagal Update: {err}")
 
 # --- 8. FOOTER ---
 st.divider()
