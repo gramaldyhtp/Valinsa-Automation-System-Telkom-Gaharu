@@ -3,154 +3,223 @@ from streamlit_gsheets import GSheetsConnection
 import pandas as pd
 import re
 from datetime import datetime
+import time
 
-# --- 1. KONFIGURASI HALAMAN ---
+# --- 1. INITIAL CONFIG ---
 st.set_page_config(
-    page_title="VALINSA Cloud - Telkom Infrastructure",
-    page_icon="🔴",
-    layout="centered"
+    page_title="VALINSA Cloud Sync", 
+    page_icon="🔴", 
+    layout="wide",
+    initial_sidebar_state="expanded"
 )
 
-# --- 2. KONEKSI GOOGLE SHEETS ---
-conn = st.connection("gsheets", type=GSheetsConnection)
+# --- 2. SETUP & CONFIGURATION ---
+def get_connection():
+    """Mengambil koneksi Google Sheets dengan caching."""
+    return st.connection("gsheets", type=GSheetsConnection)
 
-# --- 3. CUSTOM CSS (FIX CONTRAST & UI) ---
-st.markdown("""
-    <style>
-    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;800&display=swap');
-    html, body, [class*="css"] { font-family: 'Inter', sans-serif; }
-    .stApp { background: linear-gradient(180deg, #ffffff 0%, #f9f9f9 100%); }
-    input[type="text"], .stTextArea textarea {
-        color: #000000 !important;
-        background-color: #ffffff !important;
-        -webkit-text-fill-color: #000000 !important;
-    }
-    .input-card {
-        background-color: white; padding: 30px; border-radius: 15px;
-        box-shadow: 0 4px 15px rgba(0,0,0,0.05); border-top: 5px solid #EE2D24;
-        margin-bottom: 20px;
-    }
-    .stButton>button {
-        width: 100%; background: linear-gradient(90deg, #EE2D24 0%, #ff4d4d 100%);
-        color: white !important; border-radius: 10px; height: 3.8em; font-weight: 800; border: none;
-    }
-    [data-testid="stSidebar"] { background-color: #1a1a1a; }
-    [data-testid="stSidebar"] .stTextInput input { color: #000000 !important; background-color: #ffffff !important; }
-    [data-testid="stSidebar"] * { color: white !important; }
-    .footer { text-align: center; padding: 20px; font-size: 0.8em; color: #666; margin-top: 50px; border-top: 1px solid #eee; }
-    </style>
-    """, unsafe_allow_html=True)
+# Cek apakah secrets sudah di-set
+try:
+    S_ID = st.secrets["connections"]["gsheets"]["spreadsheet_id"]
+    SHEET_NAME = "FollowUP"
+    HAS_CONFIG = True
+except Exception:
+    HAS_CONFIG = False
 
-# --- 4. SIDEBAR ---
+# --- 3. UI DESIGN ---
+st.markdown(
+    "<h1 style='text-align: center; color: #EE2D24;'>VALINSA CLOUD SYNC</h1>", 
+    unsafe_allow_html=True
+)
+st.markdown(
+    "<p style='text-align: center; color: #555;'>Sistem Otomatisasi Data Infrastruktur - Telkom Infrastruktur Indonesia</p>", 
+    unsafe_allow_html=True
+)
+
+# Sidebar
 with st.sidebar:
-    st.image("https://upload.wikimedia.org/wikipedia/id/thumb/c/c4/Telkom_Infrastructure.svg/1200px-Telkom_Infrastructure.svg.png")
-    st.markdown("### 🛠️ System Settings")
-    user_input = st.text_input("👤 Nama Penginput:", placeholder="Ketikkan nama disini...")
-    st.success("● Cloud Sync Active")
-    st.write("---")
-    # Nama tab disesuaikan menjadi FollowUP
-    target_sheet = "FollowUP"
-    st.caption(f"Target Worksheet: {target_sheet}")
+    st.image(
+        "https://upload.wikimedia.org/wikipedia/commons/thumb/6/6f/Telkom_Indonesia_logo.svg/1200px-Telkom_Indonesia_logo.svg.png", 
+        use_container_width=True
+    )
+    st.subheader("⚙️ Konfigurasi")
+    
+    if not HAS_CONFIG:
+        st.error("⚠️ **Setup Belum Lengkap!**")
+        st.info("""
+        1. Buat file `.streamlit/secrets.toml` di folder yang sama.
+        2. Isi dengan:
+        ```toml
+        [connections.gsheets]
+        spreadsheet_id = "MASUKKAN_ID_SPREADSHEET_DISINI"
+        ```
+        3. Restart aplikasi.
+        """)
+        st.stop()
+    
+    st.divider()
+    st.subheader("Profil Penginput")
+    user_name = st.text_input(
+        "👤 Nama (Gramaldy/Darwin):", 
+        placeholder="Masukkan nama...",
+        key="user_input"
+    )
+    
+    st.divider()
+    if st.button("🧹 Clear System Cache", type="secondary"):
+        with st.spinner("Membersihkan cache..."):
+            st.cache_data.clear()
+            st.cache_resource.clear()
+            st.success("Cache dibersihkan! Silakan refresh.")
 
-# --- 5. HEADER ---
-st.markdown("""
-    <div style='text-align: center; margin-bottom: 20px;'>
-        <h1 style='font-size: 3em; margin-bottom: 0; color: #EE2D24;'>VALINSA CLOUD</h1>
-        <p style='color: #666;'>VALINS Automation System by Student Internship Telkom Gaharu 2026</p>
-    </div>
-    """, unsafe_allow_html=True)
+# --- 4. TEST KONEKSI GOOGLE SHEETS ---
+st.subheader("🔗 Status Koneksi")
+conn_status = "unknown"
+conn_message = ""
+conn_data = None
 
-# --- 6. LOGIKA INPUT ---
-st.markdown('<div class="input-card">', unsafe_allow_html=True)
-st.write(f"##### 📝 Paste Data Mentah (Oleh: {user_input if user_input else '...' })")
-raw_input = st.text_area(label="Input Data", height=250, placeholder="Tempel data disini...", label_visibility="collapsed")
-st.markdown('</div>', unsafe_allow_html=True)
+try:
+    test_conn = get_connection()
+    # ttl=0 untuk memastikan data fresh
+    test_data = test_conn.read(spreadsheet=S_ID, worksheet=SHEET_NAME, ttl=0)
+    conn_status = "success"
+    conn_message = "✅ Koneksi Google Sheets Berhasil!"
+    conn_data = test_data
+except Exception as e:
+    # Hapus logika "200" yang berisiko, biarkan error asli muncul
+    error_msg = str(e)
+    conn_status = "error"
+    conn_message = f"❌ Koneksi Gagal: {error_msg}"
 
-if st.button("🚀 EKSEKUSI CLOUD SYNC"):
-    if not user_input.strip():
-        st.error("⚠️ Isi Nama Penginput di sidebar!")
-    elif not raw_input.strip():
-        st.warning("⚠️ Input data kosong!")
-    else:
+if conn_status == "success":
+    st.success(conn_message)
+    if conn_data is not None and not conn_data.empty:
+        st.write(f"📊 Total baris di sheet: {len(conn_data)}")
+        # Cek apakah kolom ID Valins ada
+        if "ID Valins" in conn_data.columns:
+            st.write(f"✅ Kolom 'ID Valins' terdeteksi.")
+        else:
+            st.warning("⚠️ Kolom 'ID Valins' tidak ditemukan di Sheet. Pastikan header sesuai.")
+else:
+    st.error(conn_message)
+    st.info("⚠️ Pastikan Google Sheet sudah di-share ke akun Anda dan ID Spreadsheet benar.")
+
+# --- 5. INPUT AREA ---
+st.subheader("📋 Input Data WhatsApp")
+raw_input = st.text_area(
+    "Paste Data di sini:", 
+    height=200, 
+    placeholder="Contoh:\nODP-LGB-FA/01 PANEL: 1 VALINS: 12345678\nODP-JKT-02 PANEL: 2 VALINS: 87654321",
+    key="raw_data"
+)
+
+# --- 6. PREVIEW & VALIDASI ---
+preview_df = None
+if raw_input and user_name:
+    with st.spinner("Menganalisis data..."):
         try:
-            # 1. BACA DATA
-            try:
-                df_existing = conn.read(worksheet=target_sheet, ttl=0)
-            except Exception:
-                df_existing = pd.DataFrame()
-
-            # Tentukan Header Standar jika sheet kosong (A sampai K)
-            headers = ["Tanggal", "STO", "Nama ODP", "Panel", "ID Valins", "Cek RAM", "ID Barcode", "Status IXSA", "Keterangan", "List RED", "Inputed By"]
+            # Regex yang lebih fleksibel
+            # ODP: Mulai dengan ODP-
+            odps = re.findall(r'(ODP-[\w\-/]+)', raw_input.upper())
+            # PANEL: Angka setelah kata PANEL
+            panels = re.findall(r'PANEL\s*[:\-]?\s*(\d+)', raw_input.upper())
+            # VALINS: Angka 7-10 digit setelah VALINS atau ID
+            valins_ids = re.findall(r'(?:VALINS|ID)?\s*[:\-]?\s*(\d{7,10})', raw_input.upper())
             
-            if df_existing.empty:
-                df_existing = pd.DataFrame(columns=headers)
-                existing_ids = []
+            count = min(len(odps), len(valins_ids))
+            
+            if count > 0:
+                new_entries = []
+                for i in range(count):
+                    v_id = valins_ids[i].strip()
+                    # Ambil kode STO dari ODP (contoh: ODP-LGB-FA/01 -> LGB)
+                    sto_code = odps[i].split('-')[1] if '-' in odps[i] else ""
+                    new_entries.append({
+                        "Tanggal": datetime.now().strftime("%Y-%m-%d"),
+                        "STO": sto_code,
+                        "NamaODP": odps[i],
+                        "Panel": f"PANEL {panels[i]}" if i < len(panels) else "",
+                        "ID Valins": v_id,
+                        "ID Valins FU": "",
+                        "Status IXSA": "Pending",
+                        "Keterangan IXSA": "",
+                        "List ODP RED": "",
+                        "Inputed By": f"VALINSA - {user_name}"
+                    })
+                preview_df = pd.DataFrame(new_entries)
+                
+                st.success(f"✅ Terdeteksi {count} data valid.")
+                with st.expander("🔍 Lihat Preview Data (Sebelum Kirim)"):
+                    st.dataframe(preview_df, use_container_width=True)
             else:
-                # Pastikan jumlah kolom minimal 5 untuk ambil ID Valins di kolom E
-                if len(df_existing.columns) >= 5:
-                    existing_ids = df_existing.iloc[:, 4].astype(str).str.strip().tolist()
-                else:
-                    existing_ids = []
+                st.warning("⚠️ Data tidak terdeteksi. Pastikan format ODP dan ID Valins benar.")
+        except Exception as e:
+            st.error(f"❌ Error saat analisis: {e}")
 
-            num_cols = len(df_existing.columns)
-
-            # 2. EKSTRAKSI DATA
-            odp_list = re.findall(r'(ODP-[\w/-]+)', raw_input)
-            panel_list = re.findall(r'PANEL\s*[:\-]?\s*(\d+)', raw_input, re.IGNORECASE)
-            valins_list = re.findall(r'(?:VALINS\s*(?:ID)?\s*[:\-]?\s*)?(\d{8})', raw_input, re.IGNORECASE)
-
-            count = min(len(odp_list), len(panel_list), len(valins_list))
-            data_to_append = []
-            duplicates = []
+# --- 7. LOGIKA EKSEKUSI ---
+# Tombol hanya aktif jika ada preview data
+if preview_df is not None and st.button("🚀 SINRONISASI KE CLOUD", type="primary", use_container_width=True):
+    try:
+        conn = get_connection()
+        
+        # 1. Baca Data Existing
+        with st.spinner("⏳ Membaca data dari Cloud..."):
+            df_existing = conn.read(spreadsheet=S_ID, worksheet=SHEET_NAME, ttl=0)
             
-            for i in range(count):
-                v_id = valins_list[i].strip()
-                o_name = odp_list[i].strip()
-                p_label = f"PANEL {panel_list[i].strip()}"
-                sto_val = o_name.split('-')[1].upper() if '-' in o_name else ""
-                
-                if v_id in existing_ids:
-                    duplicates.append({"ODP": o_name, "ID": v_id})
+            if not df_existing.empty:
+                df_existing = df_existing.dropna(how='all')
+                # Cari kolom ID Valins secara dinamis (Bukan index 4)
+                if "ID Valins" in df_existing.columns:
+                    existing_ids = df_existing["ID Valins"].astype(str).str.strip().tolist()
                 else:
-                    # Buat baris data baru sesuai jumlah kolom di spreadsheet
-                    new_row = [""] * num_cols
-                    new_row[0] = datetime.now().strftime("%Y-%m-%d")    # A. Tanggal
-                    new_row[1] = sto_val                                # B. STO
-                    new_row[2] = o_name                                 # C. Nama ODP
-                    new_row[3] = p_label                                # D. Panel
-                    new_row[4] = v_id                                   # E. ID Valins
-                    
-                    if num_cols >= 8:
-                        new_row[7] = "Pending"                          # H. Status IXSA
-                    if num_cols >= 11:
-                        new_row[10] = f"VALINSA - {user_input}"         # K. Inputed By
-                    
-                    data_to_append.append(new_row)
-                    existing_ids.append(v_id)
+                    st.error("❌ Header 'ID Valins' tidak ditemukan di Google Sheet.")
+                    st.stop()
+            else:
+                existing_ids = []
 
-            # 3. UPDATE DATA
-            if data_to_append:
-                df_new = pd.DataFrame(data_to_append, columns=df_existing.columns)
-                df_final = pd.concat([df_existing, df_new], ignore_index=True)
+        # 2. Filter Duplikat
+        new_rows = []
+        skipped_count = 0
+        
+        for idx, row in preview_df.iterrows():
+            v_id = str(row["ID Valins"]).strip()
+            if v_id in existing_ids:
+                skipped_count += 1
+            else:
+                new_rows.append(row)
+
+        if len(new_rows) == 0:
+            st.warning(f"🚫 Semua data sudah ada di Cloud (Duplikat). {skipped_count} data diabaikan.")
+        else:
+            # 3. Proses Update
+            with st.spinner("⏳ Mengirim data ke Google Sheets..."):
+                # Gabungkan data lama + baru
+                if not df_existing.empty:
+                    df_final = pd.concat([df_existing, pd.DataFrame(new_rows)], ignore_index=True)
+                else:
+                    df_final = pd.DataFrame(new_rows)
                 
-                # Membersihkan data dari null/NaN (Penyebab utama Error 400)
+                # Konversi ke String untuk keamanan API
                 df_final = df_final.fillna("").astype(str)
                 
-                # Kirim balik ke Google Sheets
-                conn.update(worksheet=target_sheet, data=df_final)
+                # Update Sheet
+                conn.update(spreadsheet=S_ID, worksheet=SHEET_NAME, data=df_final)
                 
+                # 4. Feedback Sukses
                 st.balloons()
-                st.success(f"✅ Berhasil sinkron ke '{target_sheet}'")
-                st.dataframe(df_new.iloc[:, [0, 1, 2, 3, 4]]) 
-            else:
-                st.info("ℹ️ Tidak ada data baru (duplikat diabaikan).")
+                st.success(f"✅ Berhasil! {len(new_rows)} data baru masuk ke Cloud.")
+                if skipped_count > 0:
+                    st.info(f"ℹ️ {skipped_count} data duplikat tidak dimasukkan.")
+                
+                # Reset Input
+                st.session_state.raw_data = ""
+                st.rerun()
 
-            if duplicates:
-                st.warning(f"⚠️ {len(duplicates)} data duplikat ditolak.")
-                st.table(pd.DataFrame(duplicates))
+    except Exception as err:
+        st.error(f"🚨 Terjadi Masalah: {err}")
+        st.code(str(err))
+        st.stop()
 
-        except Exception as e:
-            st.error(f"🚨 Terjadi Kesalahan Cloud: {e}")
-            st.info(f"Pastikan tab di Google Sheets benar-benar bernama '{target_sheet}' (Tanpa Spasi)")
-
-st.markdown("""<div class="footer"><b>PT TELKOM INFRASTRUKTUR INDONESIA</b><br>Regional Medan Gaharu</div>""", unsafe_allow_html=True)
+# --- 8. FOOTER ---
+st.divider()
+st.caption("Developed by Gramaldy & Darwin - Institut Teknologi Del Interns @ PT Telkom Infrastruktur Indonesia")
