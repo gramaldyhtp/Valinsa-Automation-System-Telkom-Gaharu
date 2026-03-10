@@ -5,7 +5,7 @@ import re
 from datetime import datetime
 import time
 
-# --- 1. INITIAL CONFIG (Tampilan Wide sesuai gambar) ---
+# --- 1. INITIAL CONFIG (Tampilan Wide) ---
 st.set_page_config(
     page_title="VALINSA Cloud Sync", 
     page_icon="🔴", 
@@ -18,15 +18,14 @@ def get_connection():
     """Mengambil koneksi Google Sheets dengan caching."""
     return st.connection("gsheets", type=GSheetsConnection)
 
-# Ambil ID dan Nama Tabel (Ganti nama worksheet ke FollowUP sesuai gambar)
 try:
     S_ID = st.secrets["connections"]["gsheets"]["spreadsheet_id"]
-    SHEET_NAME = "FollowUP" # Memastikan nama tabel sesuai gambar Google Sheets Anda
+    SHEET_NAME = "FollowUP" 
     HAS_CONFIG = True
 except Exception:
     HAS_CONFIG = False
 
-# --- 3. UI DESIGN (Header Merah sesuai gambar) ---
+# --- 3. UI DESIGN ---
 st.markdown(
     "<h1 style='text-align: center; color: #EE2D24;'>VALINSA CLOUD SYNC</h1>", 
     unsafe_allow_html=True
@@ -36,7 +35,7 @@ st.markdown(
     unsafe_allow_html=True
 )
 
-# Sidebar (Logo Telkom dan Menu sesuai gambar)
+# Sidebar
 with st.sidebar:
     st.image(
         "https://upload.wikimedia.org/wikipedia/commons/thumb/6/6f/Telkom_Indonesia_logo.svg/1200px-Telkom_Indonesia_logo.svg.png", 
@@ -46,21 +45,13 @@ with st.sidebar:
     
     if not HAS_CONFIG:
         st.error("⚠️ **Setup Belum Lengkap!**")
-        st.info("""
-        1. Buat file `.streamlit/secrets.toml` di folder yang sama.
-        2. Isi dengan:
-        ```toml
-        [connections.gsheets]
-        spreadsheet_id = "MASUKKAN_ID_SPREADSHEET_DISINI"
-        ```
-        3. Restart aplikasi.
-        """)
+        st.info("Pastikan ID Spreadsheet sudah benar di Secrets.")
         st.stop()
     
     st.divider()
     st.subheader("Profil Penginput")
     user_name = st.text_input(
-        "👤 Nama (Gramaldy/Darwin):", 
+        "👤 Nama ():", 
         placeholder="Masukkan nama...",
         key="user_input"
     )
@@ -75,36 +66,26 @@ with st.sidebar:
 # --- 4. TEST KONEKSI GOOGLE SHEETS ---
 st.subheader("🔗 Status Koneksi")
 conn_status = "unknown"
-conn_message = ""
 conn_data = None
 
 try:
     test_conn = get_connection()
-    # Membaca data dengan ttl=0 agar tidak tertahan cache lama
     test_data = test_conn.read(spreadsheet=S_ID, worksheet=SHEET_NAME, ttl=0)
     conn_status = "success"
-    conn_message = "✅ Koneksi Google Sheets Berhasil!"
     conn_data = test_data
 except Exception as e:
-    # Mengembalikan pesan error asli agar mudah didebug (termasuk error Response 200)
-    error_msg = str(e)
     conn_status = "error"
-    conn_message = f"❌ Koneksi Gagal: {error_msg}"
+    conn_message = f"❌ Koneksi Gagal: {str(e)}"
 
 if conn_status == "success":
-    st.success(conn_message)
+    st.success("✅ Koneksi Google Sheets Berhasil!")
     if conn_data is not None and not conn_data.empty:
         st.write(f"📊 Total baris di sheet: {len(conn_data)}")
-        if "ID Valins" in conn_data.columns:
-            st.write(f"✅ Kolom 'ID Valins' terdeteksi.")
-        else:
-            st.warning("⚠️ Kolom 'ID Valins' tidak ditemukan di Sheet.")
 else:
     st.error(conn_message)
-    st.info("⚠️ Pastikan Google Sheet sudah di-share ke akun Service Account Anda sebagai EDITOR.")
 
 # --- 5. INPUT AREA ---
-st.subheader("📋 Input Data WhatsApp")
+st.subheader("📋 Input Data Lapangan")
 raw_input = st.text_area(
     "Paste Data di sini:", 
     height=200, 
@@ -112,7 +93,7 @@ raw_input = st.text_area(
     key="raw_data"
 )
 
-# --- 6. PREVIEW & VALIDASI (Logika Analisis Asli) ---
+# --- 6. PREVIEW & VALIDASI ---
 preview_df = None
 if raw_input and user_name:
     with st.spinner("Menganalisis data..."):
@@ -149,29 +130,67 @@ if raw_input and user_name:
         except Exception as e:
             st.error(f"❌ Error saat analisis: {e}")
 
-# --- 7. LOGIKA EKSEKUSI (Update Spreadsheet) ---
+# --- 7. LOGIKA EKSEKUSI (Update Spreadsheet & Deteksi Duplikat Ketat) ---
 if preview_df is not None and st.button("🚀 SINRONISASI KE CLOUD", type="primary", use_container_width=True):
     try:
         conn = get_connection()
-        with st.spinner("⏳ Mengirim data ke Google Sheets..."):
+        with st.spinner("⏳ Memeriksa duplikat dan mengirim data..."):
             df_existing = conn.read(spreadsheet=S_ID, worksheet=SHEET_NAME, ttl=0)
             
-            # Gabungkan data lama dan baru (Pastikan worksheet FollowUP ada sesuai gambar)
-            if df_existing is not None:
+            existing_ids_set = set()
+            
+            if df_existing is not None and not df_existing.empty:
                 df_existing = df_existing.dropna(how='all')
-                df_final = pd.concat([df_existing, preview_df], ignore_index=True)
+                if "ID Valins" in df_existing.columns:
+                    # NORMALISASI KETAT: 
+                    # 1. Ubah ke string
+                    # 2. Hapus desimal '.0' yang sering muncul dari Google Sheets
+                    # 3. Hapus spasi
+                    existing_ids_set = set(
+                        df_existing["ID Valins"].astype(str)
+                        .str.replace(r'\.0$', '', regex=True)
+                        .str.strip()
+                        .tolist()
+                    )
+
+            new_rows_to_add = []
+            duplicate_ids_found = []
+            
+            for _, row in preview_df.iterrows():
+                # Normalisasi ID input
+                current_id = str(row["ID Valins"]).strip()
+                
+                if current_id in existing_ids_set:
+                    duplicate_ids_found.append(current_id)
+                else:
+                    new_rows_to_add.append(row)
+                    existing_ids_set.add(current_id)
+            
+            if not new_rows_to_add:
+                st.warning(f"🚫 **Gagal:** Semua data ({len(duplicate_ids_found)} ID) sudah ada di database.")
+                if duplicate_ids_found:
+                    st.info(f"ID Duplikat: {', '.join(set(duplicate_ids_found))}")
             else:
-                df_final = preview_df
-            
-            df_final = df_final.fillna("").astype(str)
-            
-            # Kirim Update
-            conn.update(spreadsheet=S_ID, worksheet=SHEET_NAME, data=df_final)
-            
-            st.balloons()
-            st.success(f"✅ Berhasil! {len(preview_df)} data masuk ke tab {SHEET_NAME}.")
-            time.sleep(2)
-            st.rerun()
+                df_new_to_push = pd.DataFrame(new_rows_to_add)
+                
+                if df_existing is not None and not df_existing.empty:
+                    df_final = pd.concat([df_existing, df_new_to_push], ignore_index=True)
+                else:
+                    df_final = df_new_to_push
+                
+                # Pastikan data dikirim sebagai string murni untuk mencegah munculnya kembali desimal .0
+                df_final = df_final.fillna("").astype(str)
+                
+                conn.update(spreadsheet=S_ID, worksheet=SHEET_NAME, data=df_final)
+                
+                st.balloons()
+                st.success(f"✅ **Berhasil!** {len(new_rows_to_add)} data baru ditambahkan.")
+                
+                if duplicate_ids_found:
+                    st.warning(f"⚠️ {len(set(duplicate_ids_found))} data lainnya diabaikan karena duplikat.")
+                
+                time.sleep(2)
+                st.rerun()
 
     except Exception as err:
         st.error(f"🚨 Gagal Update: {err}")
